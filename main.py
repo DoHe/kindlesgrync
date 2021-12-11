@@ -1,20 +1,24 @@
-import time
 import os
+import time
 
 from selenium import webdriver
 from selenium.webdriver.common.by import By
+from selenium.webdriver.remote.webelement import WebElement
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait
 from webdriver_manager.chrome import ChromeDriverManager
 
 
 class Syncer():
 
-    def __init__(self, profile: bool, username: str, password: str) -> None:
+    def __init__(self, profile: bool = True, username: str = "", password: str = "") -> None:
         options = webdriver.ChromeOptions()
+        options.add_experimental_option('excludeSwitches', ['enable-logging'])
         if profile:
             options.add_argument(f'--user-data-dir={os.getcwd()}\\profile')
             options.add_argument('--profile-directory=Default')
         self.driver = webdriver.Chrome(
-            ChromeDriverManager().install(),
+            ChromeDriverManager(log_level=0).install(),
             options=options
         )
         self.username = username
@@ -25,7 +29,10 @@ class Syncer():
         self.login()
         time.sleep(2)
         self.get_books()
-        time.sleep(2000)
+        # time.sleep(2000)
+
+    def stop(self):
+        self.driver.close()
 
     def login(self) -> None:
         email_field = self.driver.find_elements(By.ID, "ap_email")
@@ -40,7 +47,40 @@ class Syncer():
             time.sleep(10)
 
     def get_books(self) -> None:
-        for book in self.driver.find_elements(By.CSS_SELECTOR, "[data-asin]"):
+        books = self.driver.find_elements(By.CSS_SELECTOR, "[data-asin]")
+        print("Found", len(books), "books")
+        for book in books:
             asin = book.get_attribute("data-asin")
-            prit(asin)
-        # kindleReader_footer_message
+            print(asin)
+            self.get_book(book)
+            self.driver.navigate().back()  # TODO: fix
+
+    def get_book(self, book: WebElement) -> int:
+        book.click()
+
+        iframe = WebDriverWait(self.driver, 10).until(
+            EC.presence_of_element_located((By.ID, "KindleReaderIFrame"))
+        )
+        self.driver.switch_to.frame(iframe)
+        progress = 0
+        try:
+            footer = WebDriverWait(self.driver, 10).until(
+                EC.presence_of_element_located(
+                    (By.ID, "kindleReader_footer_message"))
+            )
+            progress = footer.text.split("%")[0]
+            try:
+                progress = int(progress)
+            except ValueError:
+                pass
+        finally:
+            self.driver.switch_to.default_content()
+
+        return progress
+
+
+syncer = Syncer()
+try:
+    syncer.sync()
+finally:
+    syncer.stop()
