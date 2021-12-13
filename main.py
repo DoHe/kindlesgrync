@@ -11,9 +11,13 @@ from webdriver_manager.chrome import ChromeDriverManager
 
 class Syncer():
 
-    def __init__(self, profile: bool = True, username: str = "", password: str = "") -> None:
+    def __init__(self, profile: bool = True, username: str = "", password: str = "", logging: bool = True) -> None:
         options = webdriver.ChromeOptions()
-        options.add_experimental_option('excludeSwitches', ['enable-logging'])
+        if not logging:
+            options.add_experimental_option(
+                'excludeSwitches',
+                ['enable-logging']
+            )
         if profile:
             options.add_argument(f'--user-data-dir={os.getcwd()}\\profile')
             options.add_argument('--profile-directory=Default')
@@ -49,11 +53,17 @@ class Syncer():
     def get_books(self) -> None:
         books = self.driver.find_elements(By.CSS_SELECTOR, "[data-asin]")
         print("Found", len(books), "books")
-        for book in books:
+        for i in range(len(books)):
+            WebDriverWait(self.driver, 10).until(
+                EC.presence_of_element_located(
+                    (By.CSS_SELECTOR, "[data-asin]")
+                )
+            )
+            book = self.driver.find_elements(By.CSS_SELECTOR, "[data-asin]")
             asin = book.get_attribute("data-asin")
             print(asin)
-            self.get_book(book)
-            self.driver.navigate().back()  # TODO: fix
+            progress = self.get_book(book)
+            print(progress)
 
     def get_book(self, book: WebElement) -> int:
         book.click()
@@ -63,19 +73,18 @@ class Syncer():
         )
         self.driver.switch_to.frame(iframe)
         progress = 0
+        footer = WebDriverWait(self.driver, 10).until(
+            EC.presence_of_element_located(
+                (By.ID, "kindleReader_footer_message"))
+        )
+        progress = footer.text.split("%")[0]
         try:
-            footer = WebDriverWait(self.driver, 10).until(
-                EC.presence_of_element_located(
-                    (By.ID, "kindleReader_footer_message"))
-            )
-            progress = footer.text.split("%")[0]
-            try:
-                progress = int(progress)
-            except ValueError:
-                pass
-        finally:
-            self.driver.switch_to.default_content()
+            progress = int(progress)
+        except ValueError:
+            pass
 
+        self.driver.switch_to.default_content()
+        self.driver.back()  # alternative, click kindleReader_button_close
         return progress
 
 
