@@ -1,7 +1,7 @@
 import os
 import time
-from dataclasses import dataclass
-from typing import Dict, Tuple
+import json
+from typing import List, Tuple
 
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -10,13 +10,11 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 from webdriver_manager.chrome import ChromeDriverManager
 
+from constants import STORE_PATH, COLLECTED
 
-@dataclass
-class Book:
-    title: str
-    asin: str
-    progress: int
-    authors: str
+BLOCKED = [
+    "My life in Sarawak"
+]
 
 
 class Syncer():
@@ -37,7 +35,7 @@ class Syncer():
         )
         self.username = username
         self.password = password
-        self.collected: Dict[str, Book] = {}
+        self.collected: COLLECTED = {}
 
     def sync(self) -> None:
         self.driver.get("https://read.amazon.com")
@@ -58,35 +56,58 @@ class Syncer():
             password_field.send_keys(self.password)
             submit_button.click()
 
-    def get_books(self) -> None:
-        books = WebDriverWait(self.driver, 10).until(
+    def wait_for_books(self) -> List[WebElement]:
+        return WebDriverWait(self.driver, 10).until(
             EC.presence_of_all_elements_located(
                 (By.CSS_SELECTOR, "[data-asin]")
             )
         )
-        print("Found", len(books), "books")
-        book_index = 0
-        prev_last_asin = ""
-        while True:
-            books = WebDriverWait(self.driver, 10).until(
-                EC.presence_of_all_elements_located(
-                    (By.CSS_SELECTOR, "[data-asin]")
-                )
-            )
-            last_asin = books[-1].get_attribute("data-asin")
 
+    def get_books(self) -> None:
+        books = self.wait_for_books()
+        total_num_books = self.scroll_to_index(-1)
+        print("Found", total_num_books, "books total")
+        book_index = self.restore_collected()
+        while True:
+            books = self.wait_for_books()
+            if book_index >= len(books):
+                if book_index >= total_num_books:
+                    break
+                self.scroll_to_index(book_index)
+                books = self.wait_for_books()
+            print("Selecting from", len(books))
+            print("Current index is", book_index)
             book = books[book_index]
             asin, title, authors = self.get_book_attributes(book)
+            if title in BLOCKED:
+                book_index += 1
+                continue
             progress = self.get_progress(book)
-            self.collected[asin] = Book(title, asin, progress, authors)
-            self.store_collected()
-
+            self.collected[asin] = {
+                "title": title,
+                "asin": asin,
+                "progress": progress,
+                "authors": authors
+            }
+            self.store_collected(book_index)
             book_index += 1
-            if book_index == len(books):
-                if last_asin == prev_last_asin:
-                    break
-                book_index -= 1
-            prev_last_asin = last_asin
+
+    def scroll_to_index(self, index: int) -> int:
+        num_books = 0
+        while True:
+            books = self.wait_for_books()
+            if index <= len(books) and index != -1:
+                print("Scrolled to index")
+                break
+            if num_books == len(books):
+                print("Scrolled to end")
+                break
+            num_books = len(books)
+            self.driver.execute_script(
+                "window.scrollTo(0, document.body.scrollHeight);"
+            )
+            time.sleep(1.2)
+        return num_books
 
     def get_book_attributes(self, book: WebElement) -> Tuple[str, str, str]:
         asin = book.get_attribute("data-asin")
@@ -117,8 +138,25 @@ class Syncer():
         self.driver.back()
         return progress
 
-    def store_collected(self):
-        print(self.collected)
+    def store_collected(self, index: int) -> None:
+        print("Storing", len(self.collected), "entries")
+        with open(STORE_PATH, "w") as f:
+            json.dump({
+                "index": index,
+                "collected": self.collected,
+            }, f, indent=4)
+
+    def restore_collected(self) -> int:
+        if not os.path.exists(STORE_PATH):
+            print("Nothing to restore")
+            return 0
+        with open(STORE_PATH) as f:
+            collected = json.load(f)
+        self.collected = collected.get("collected", {})
+        print("Restored", len(self.collected), "books")
+        index = collected.get("index", 0)
+        print("Resumng from index", index)
+        return index
 
     def wait_for_text(self, elem):
         i = 0
